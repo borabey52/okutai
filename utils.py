@@ -48,25 +48,15 @@ def get_db():
     finally:
         db.close()
 
-# --- YENİ RESİM İŞLEME FONKSİYONU (HEIC + SIKIŞTIRMA) ---
+# --- RESİM İŞLEME FONKSİYONU ---
 def resim_yukle_ve_isle(uploaded_file):
-    """
-    Bu fonksiyon:
-    1. HEIC (iPhone) formatını JPG yapar.
-    2. Resmi 800px'e kadar küçültür.
-    3. Dosya boyutunu devasa oranda düşürür.
-    """
     try:
         image = Image.open(uploaded_file)
-        
-        # 1. Yan dönmüş fotoları düzelt
         image = ImageOps.exif_transpose(image)
         
-        # 2. Renk formatını RGB yap
         if image.mode != "RGB":
             image = image.convert("RGB")
             
-        # 3. BOYUT KÜÇÜLTME (800px idealdir)
         max_size = (800, 800)
         image.thumbnail(max_size, Image.Resampling.LANCZOS)
         
@@ -75,30 +65,20 @@ def resim_yukle_ve_isle(uploaded_file):
         print(f"Resim işleme hatası: {e}")
         return None
 
-# --- MERKEZİ YÖNETİM FONKSİYONU ---
+# --- EKSİK OLAN SAYFA YÜKLE FONKSİYONU ---
 def sayfa_yukle():
-    """
-    Her sayfanın başında çalışır. 
-    Güvenlik, Tasarım, MENÜ BUTONLARI ve PROFİL KARTI buradadır.
-    """
-    # 1. Güvenlik Kontrolü
     if 'logged_in' not in st.session_state or not st.session_state.logged_in:
         st.switch_page("main.py")
         st.stop()
 
-    # 2. Session Başlat
     init_session()
-
-    # 3. Tasarım Uygula (CSS)
     apply_design()
 
-    # 4. ŞIK SOL PANEL (SIDEBAR)
     with st.sidebar:
         user = get_user_data(st.session_state.user_id)
         kredi = user.credits if user else st.session_state.credits
         st.session_state.credits = kredi
         
-        # --- PROFİL KARTI ---
         st.markdown(f"""
         <div class="profile-card">
             <div class="profile-icon">👤</div>
@@ -112,7 +92,6 @@ def sayfa_yukle():
         
         st.markdown("---") 
 
-        # --- MENÜ ---
         st.markdown("### 🧭 Menü")
         
         st.page_link("pages/1_📸_Sınav_Okut.py", label="Sınav Okut", icon="📸")
@@ -122,12 +101,10 @@ def sayfa_yukle():
         
         st.markdown("---")
 
-        # Çıkış Butonu
         if st.button("🚪 Çıkış Yap", use_container_width=True):
             st.session_state.logged_in = False
             st.switch_page("main.py")
         
-        # --- FOOTER ---
         st.markdown("""
         <div style='text-align:center; color:#94a3b8; font-size:10pt; margin-top:30px;'>
             ©OkutAI - Sinan Sayılır
