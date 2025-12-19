@@ -1,248 +1,277 @@
 import streamlit as st
-import utils
-import google.generativeai as genai
-from google.generativeai.types import HarmCategory, HarmBlockThreshold
-from PIL import Image
+import sqlite3
+import bcrypt
 import json
-import time
-import os
-import io # Boyut ölçümü için gerekli
+import base64
+import pandas as pd
+from sqlalchemy import create_engine, Column, Integer, String, Text, ForeignKey, DateTime
+from sqlalchemy.orm import sessionmaker, declarative_base
+from datetime import datetime
+from PIL import Image, ImageOps 
+import pillow_heif 
+import io
 
-# --- SAYFA VE MERKEZİ YÖNETİM ---
-st.set_page_config(page_title="Sınav Okut", page_icon="📸", layout="wide", initial_sidebar_state="expanded")
-utils.sayfa_yukle() 
-# --------------------------------
+# HEIC formatını sisteme tanıtıyoruz
+pillow_heif.register_heif_opener()
 
-# --- LOGO VE BAŞLIK ---
-try:
-    img_base64 = utils.get_img_as_base64("okutai_logo.png") 
-    if img_base64:
+# --- VERİTABANI AYARLARI ---
+DATABASE_URL = "sqlite:///okutai.db"
+Base = declarative_base()
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+class User(Base):
+    __tablename__ = "users"
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, unique=True, index=True)
+    hashed_password = Column(String)
+    is_approved = Column(Integer, default=0)
+    credits = Column(Integer, default=0)
+
+class ExamRecord(Base):
+    __tablename__ = "exam_records"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    student_name = Column(String)
+    student_number = Column(String)
+    session_name = Column(String, default="Genel Sınav")
+    total_score = Column(Integer)
+    details_json = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+Base.metadata.create_all(bind=engine)
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+# --- YENİ RESİM İŞLEME FONKSİYONU (HEIC + SIKIŞTIRMA) ---
+def resim_yukle_ve_isle(uploaded_file):
+    """
+    Bu fonksiyon:
+    1. HEIC (iPhone) formatını JPG yapar.
+    2. Resmi 800px'e kadar küçültür.
+    3. Dosya boyutunu devasa oranda düşürür.
+    """
+    try:
+        image = Image.open(uploaded_file)
+        
+        # 1. Yan dönmüş fotoları düzelt
+        image = ImageOps.exif_transpose(image)
+        
+        # 2. Renk formatını RGB yap
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+            
+        # 3. BOYUT KÜÇÜLTME (800px idealdir)
+        max_size = (800, 800)
+        image.thumbnail(max_size, Image.Resampling.LANCZOS)
+        
+        return image
+    except Exception as e:
+        print(f"Resim işleme hatası: {e}")
+        return None
+
+# --- MERKEZİ YÖNETİM FONKSİYONU ---
+def sayfa_yukle():
+    """
+    Her sayfanın başında çalışır. 
+    Güvenlik, Tasarım, MENÜ BUTONLARI ve PROFİL KARTI buradadır.
+    """
+    # 1. Güvenlik Kontrolü
+    if 'logged_in' not in st.session_state or not st.session_state.logged_in:
+        st.switch_page("main.py")
+        st.stop()
+
+    # 2. Session Başlat
+    init_session()
+
+    # 3. Tasarım Uygula (CSS)
+    apply_design()
+
+    # 4. ŞIK SOL PANEL (SIDEBAR)
+    with st.sidebar:
+        user = get_user_data(st.session_state.user_id)
+        kredi = user.credits if user else st.session_state.credits
+        st.session_state.credits = kredi
+        
+        # --- PROFİL KARTI ---
         st.markdown(f"""
-            <div style="display: flex; flex-direction: column; align-items: center; justify-content: center;">
-                <img src="data:image/png;base64,{img_base64}" width="220" style="margin-bottom: 5px;">
-                <h3 style='color: #002D62; margin: 0; font-size: 1.5rem; font-weight: 800;'>Sen Okut, O Puanlasın.</h3>
+        <div class="profile-card">
+            <div class="profile-icon">👤</div>
+            <div class="profile-name">{st.session_state.username}</div>
+            <div class="profile-credit-box">
+                <span style="font-size: 1.2rem;">🪙</span> 
+                <span class="credit-text">Kalan Kredi: <strong>{kredi}</strong></span>
             </div>
-            """, unsafe_allow_html=True)
-    else:
-        st.markdown("<h1 style='text-align: center; color: #002D62;'>OkutAİ</h1>", unsafe_allow_html=True)
-except:
-    st.markdown("<h1 style='text-align: center; color: #002D62;'>OkutAİ</h1>", unsafe_allow_html=True)
-
-st.divider()
-
-# Kredi Kontrolü
-if st.session_state.credits <= 0:
-    st.error("⛔ Krediniz tükenmiştir! Lütfen yöneticinizle görüşün.")
-    st.stop()
-
-# API KEY
-SABIT_API_KEY = ""
-try:
-    if "GOOGLE_API_KEY" in st.secrets: SABIT_API_KEY = st.secrets["GOOGLE_API_KEY"]
-except: pass
-if not SABIT_API_KEY: SABIT_API_KEY = os.getenv("GOOGLE_API_KEY", "")
-
-# Güvenlik Ayarları
-guvenlik_ayarlari = {
-    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-}
-
-# --- ARAYÜZ ---
-col_sol, col_sag = st.columns([1, 1], gap="large")
-
-with col_sol:
-    st.header("1. Sınav Bilgileri")
-    
-    # --- AKILLI SINAV SEÇİMİ ---
-    mevcut_oturumlar = utils.get_existing_sessions(st.session_state.user_id)
-    secim_tipi = st.radio("İşlem Türü:", ["🆕 Yeni Sınav Oluştur", "➕ Mevcut Sınava Ekle"], horizontal=True)
-    
-    oturum_adi = ""
-    if secim_tipi == "🆕 Yeni Sınav Oluştur":
-        oturum_adi = st.text_input("Yeni Sınav Adı:", placeholder="Örn: 5/C Matematik 1. Yazılı")
-    else:
-        if not mevcut_oturumlar:
-            st.warning("⚠️ Henüz kayıtlı sınavınız yok. 'Yeni Sınav Oluştur' seçeneğini kullanın.")
-        else:
-            oturum_adi = st.selectbox("Hangi Sınava Eklensin?", mevcut_oturumlar)
-            st.info(f"💡 Okutacağınız kağıtlar **'{oturum_adi}'** grubuna dahil edilecektir.")
-    # ---------------------------
-
-    ogretmen_promptu = st.text_area("Öğretmen Notu / Kriter:", height=100, placeholder="Ör: Yazım hataları -1 puan...")
-    sayfa_tipi = st.radio("Sayfa Düzeni", ["Tek Sayfa", "Çift Sayfa"], horizontal=True)
-    
-    # --- CEVAP ANAHTARI ---
-    with st.expander("Cevap Anahtarı (Opsiyonel)"):
-        rubrik_files = st.file_uploader("Yükle (Ön ve Arka Yüz)", type=["jpg","png","jpeg","heic","heif","JPG","PNG","JPEG","HEIC"], accept_multiple_files=True, key="rub")
-        rub_imgs = []
-        if rubrik_files:
-            for f in rubrik_files:
-                processed_img = utils.resim_yukle_ve_isle(f)
-                if processed_img:
-                    rub_imgs.append(processed_img)
-            st.caption(f"✅ {len(rub_imgs)} sayfa cevap anahtarı işlendi.")
-    # ----------------------------
-
-with col_sag:
-    st.header("2. Kağıt Yükleme")
-    
-    st.info("💡 **Bilgi:** Mobilden giriyorsanız aşağıdaki alana tıklayıp **Kamera** veya **Galeri** seçeneğini kullanabilirsiniz.")
-    
-    # DÜZELTME 1: 'key' parametresi ekledik. Bu, sayfa yenilenirse dosyanın kaybolmamasını sağlar.
-    upl_files = st.file_uploader(
-        "Sınav Kağıtlarını Seç veya Çek", 
-        type=["jpg","png","jpeg","heic","heif","JPG","PNG","JPEG","HEIC","HEIF"], 
-        accept_multiple_files=True,
-        key="sinav_kagidi_uploader" 
-    )
-    
-    tum_gorseller = []
-    
-    if upl_files:
-        st.write(f"📥 {len(upl_files)} dosya alındı, işleniyor...")
+        </div>
+        """, unsafe_allow_html=True)
         
-        for f in upl_files:
-            try:
-                img = utils.resim_yukle_ve_isle(f)
-                if img: 
-                    tum_gorseller.append(img)
-                    
-                    # DÜZELTME 2: KANIT SİSTEMİ (BOYUT HESAPLAMA)
-                    # İşlenmiş resmin RAM'deki boyutunu hesaplayıp gösterelim
-                    img_byte_arr = io.BytesIO()
-                    img.save(img_byte_arr, format='JPEG', quality=85)
-                    size_kb = len(img_byte_arr.getvalue()) / 1024
-                    orig_mb = f.size / (1024 * 1024)
-                    
-                    st.caption(f"✅ **{f.name}** hazır! (📉 {orig_mb:.1f} MB -> **{size_kb:.0f} KB**'a düşürüldü)")
-                    
-                else:
-                    st.error(f"❌ '{f.name}' dosyası okunamadı!")
-            except Exception as e:
-                st.error(f"❌ Hata: {f.name} işlenirken sorun oluştu: {e}")
+        st.markdown("---") 
+
+        # --- MENÜ ---
+        st.markdown("### 🧭 Menü")
         
-        if len(tum_gorseller) > 0:
-            st.success(f"🚀 {len(tum_gorseller)} kağıt puanlamaya hazır!")
+        st.page_link("pages/1_📸_Sınav_Okut.py", label="Sınav Okut", icon="📸")
+        st.page_link("pages/2_📊_Analiz.py", label="Analiz", icon="📊")
+        st.page_link("pages/3_Yardim.py", label="Yardım", icon="❓")
+        st.page_link("pages/4_Iletisim.py", label="İletişim", icon="📞")
+        
+        st.markdown("---")
 
-st.divider()
+        # Çıkış Butonu
+        if st.button("🚪 Çıkış Yap", use_container_width=True):
+            st.session_state.logged_in = False
+            st.switch_page("main.py")
+        
+        # --- FOOTER ---
+        st.markdown("""
+        <div style='text-align:center; color:#94a3b8; font-size:10pt; margin-top:30px;'>
+            ©OkutAI - Sinan Sayılır
+        </div>
+        """, unsafe_allow_html=True)
 
-if st.button("🚀 KAĞITLARI OKUT VE PUANLA", type="primary", use_container_width=True):
-    if not oturum_adi:
-        st.error("⚠️ Lütfen bir Sınav Adı belirleyin veya listeden seçin!")
-    elif not SABIT_API_KEY:
-        st.error("API Key eksik.")
-    else:
-        if not tum_gorseller:
-            st.warning("⚠️ Henüz geçerli bir dosya yüklenmedi.")
-        else:
-            genai.configure(api_key=SABIT_API_KEY)
-            model = genai.GenerativeModel("gemini-flash-latest")
-            
-            is_paketleri = []
-            adim = 2 if "Çift" in sayfa_tipi and len(tum_gorseller)>1 else 1
-            
-            for i in range(0, len(tum_gorseller), adim):
-                p = tum_gorseller[i:i+adim]
-                if p: is_paketleri.append(p)
+def footer_ekle():
+    st.markdown("""
+    <div style="text-align: center; color: #94a3b8; font-size: 10pt; margin-top: 60px; font-family: sans-serif;">
+        OkutAI uygulaması <strong>Sinan Sayılır</strong> tarafından geliştirilmiş ve kodlanmıştır.
+    </div>
+    """, unsafe_allow_html=True)
 
-            prog = st.progress(0); txt = st.empty(); yeni_veriler = []
-            
-            # --- PROMPT ---
-            ANA_KOMUT = """
-            Sen bir öğretmen asistanısın. Görevin sınav kağıdını okumak.
-            
-            ÇOK ÖNEMLİ KURAL - BOŞ KAĞIT KONTROLÜ:
-            1. Önce kağıda dikkatlice bak. Öğrenci tarafından yazılmış bir cevap, işaretlenmiş bir şık veya karalama var mı?
-            2. Eğer kağıt üzerinde sadece soru metni varsa ve öğrenci HİÇBİR ŞEY yazmamışsa, o soru için "cevap": "BOŞ", "puan": 0, "yorum": "Öğrenci cevap vermemiş." olarak döndür.
-            3. ASLA soruyu kendin çözüp öğrenci çözmüş gibi puan verme. Sadece öğrencinin yazdıklarını değerlendir.
-            
-            ÇIKTI FORMATI:
-            Sadece geçerli bir JSON döndür. Başka hiçbir metin yazma.
-            Format: {"kimlik":{"ad_soyad":"...","numara":"..."},"degerlendirme":[{"no":"1","soru":"...","cevap":"...","puan":0,"tam_puan":10,"yorum":"..."}]}
-            
-            PUANLAMA:
-            - Cevap doğruysa tam puan ver.
-            - Kısmen doğruysa puan kır.
-            - Yanlışsa veya BOŞ ise 0 ver.
-            """
-            
-            for idx, imgs in enumerate(is_paketleri):
-                txt.write(f"⏳ Okunuyor: {idx+1}/{len(is_paketleri)} - {oturum_adi}")
-                try:
-                    prompt = [ANA_KOMUT]
-                    if ogretmen_promptu: prompt.append(f"ÖĞRETMEN EK NOTU: {ogretmen_promptu}")
-                    if rub_imgs: 
-                        prompt.append("CEVAP ANAHTARI (RUBRİK):")
-                        prompt.extend(rub_imgs) 
+def init_session():
+    if 'logged_in' not in st.session_state: st.session_state.logged_in = False
+    if 'user_id' not in st.session_state: st.session_state.user_id = None
+    if 'username' not in st.session_state: st.session_state.username = ""
+    if 'credits' not in st.session_state: st.session_state.credits = 0
+    if 'sinif_verileri' not in st.session_state: st.session_state.sinif_verileri = []
+    if 'kamera_acik' not in st.session_state: st.session_state.kamera_acik = False
 
-                    prompt.append("DEĞERLENDİRİLECEK ÖĞRENCİ KAĞIDI:"); prompt.extend(imgs)
+def apply_design():
+    st.markdown("""
+    <style>
+    .block-container { padding-top: 1rem !important; padding-bottom: 1rem !important; }
+    header[data-testid="stHeader"] { display: none !important; }
+    [data-testid="stToolbar"] { display: none !important; }
+    #MainMenu { display: none !important; }
+    footer { display: none !important; }
+    [data-testid="stDecoration"] { display: none !important; }
+    [data-testid="stSidebarNav"] { display: none !important; }
+    
+    .profile-card {
+        background-color: #ffffff;
+        border: 1px solid #e0e0e0;
+        border-radius: 15px;
+        padding: 20px;
+        text-align: center;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        margin-bottom: 10px;
+    }
+    .profile-icon {
+        font-size: 40px;
+        margin-bottom: 10px;
+        background-color: #f1f5f9;
+        width: 70px;
+        height: 70px;
+        line-height: 70px;
+        border-radius: 50%;
+        margin-left: auto;
+        margin-right: auto;
+    }
+    .profile-name {
+        font-size: 20px !important;
+        font-weight: 800;
+        color: #0f172a;
+        margin-bottom: 10px;
+        font-family: 'Segoe UI', sans-serif;
+    }
+    .profile-credit-box {
+        background-color: #f8fafc;
+        border: 1px dashed #cbd5e1;
+        border-radius: 10px;
+        padding: 10px;
+        color: #334155;
+    }
+    .credit-text {
+        font-size: 16px !important;
+        font-weight: 500;
+    }
+    div.stButton > button { width: 100%; border-radius: 8px; font-weight: bold; border: 1px solid #d1d5db; }
+    div.stButton > button:hover { border-color: #ef4444; color: #ef4444; background-color: #fef2f2; }
+    .streamlit-expanderHeader { font-weight: bold; background-color: #ffffff; border: 1px solid #e0e0e0; border-radius: 8px; margin-bottom: 5px; }
+    h1, h2, h3 { color: #002D62; }
+    </style>
+    """, unsafe_allow_html=True)
 
-                    res = model.generate_content(prompt, safety_settings=guvenlik_ayarlari)
-                    try: cevap_metni = res.text
-                    except: continue
+# --- VERİTABANI İŞLEMLERİ ---
+def login_user(username, password):
+    db = next(get_db())
+    user = db.query(User).filter(User.username == username).first()
+    if user and bcrypt.checkpw(password.encode(), user.hashed_password.encode()): return user
+    return None
 
-                    d = json.loads(utils.extract_json(cevap_metni))
-                    k = d.get("kimlik",{})
-                    s = d.get("degerlendirme",[])
-                    tp = sum([float(x.get('puan',0)) for x in s])
-                    
-                    kayit = {
-                        "Ad Soyad": k.get("ad_soyad","?"), 
-                        "Numara": k.get("numara","?"), 
-                        "Oturum": oturum_adi,     
-                        "Toplam Puan": tp, 
-                        "Detaylar": s
-                    }
-                    st.session_state.sinif_verileri.append(kayit)
-                    yeni_veriler.append(kayit)
-                    
-                except Exception as e: st.error(f"Hata: {e}")
-                prog.progress((idx+1)/len(is_paketleri))
-            
-            if yeni_veriler:
-                utils.save_results(st.session_state.user_id, yeni_veriler, oturum_adi)
-                if utils.deduct_credit(st.session_state.user_id, 1):
-                    st.session_state.credits -= 1
-                txt.success("✅ Tamamlandı ve Kaydedildi!"); st.balloons(); time.sleep(1); st.rerun()
+def create_user(username, password):
+    db = next(get_db())
+    if db.query(User).filter(User.username == username).first(): return False
+    hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+    user = User(username=username, hashed_password=hashed, is_approved=0, credits=0)
+    db.add(user); db.commit(); return True
 
-# --- ANLIK SONUÇLAR ---
-if len(st.session_state.sinif_verileri) > 0:
-    st.markdown(f"### 📝 {oturum_adi} - Sonuçlar")
-    for i, ogrenci in enumerate(reversed(st.session_state.sinif_verileri)):
-        if ogrenci.get("Oturum") == oturum_adi:
-            baslik = f"📄 {ogrenci['Ad Soyad']} | {int(ogrenci['Toplam Puan'])}"
-            with st.expander(baslik, expanded=False):
-                if "Detaylar" in ogrenci:
-                    for soru in ogrenci["Detaylar"]:
-                        p_val = float(soru.get('puan', 0))
-                        t_val = float(soru.get('tam_puan', 0))
-                        
-                        renk_kod = "green" if p_val == t_val and t_val > 0 else "red" if p_val == 0 else "orange"
-                        ikon = "✅" if p_val == t_val and t_val > 0 else "❌" if p_val == 0 else "⚠️"
-                        
-                        cevap_text = soru.get('cevap', '')
-                        if "BOŞ" in str(cevap_text).upper():
-                            ikon = "⛔"
-                            renk_kod = "gray"
-                            cevap_text = "⚠️ ÖĞRENCİ CEVABI BULUNAMADI"
+def get_user_data(user_id):
+    db = next(get_db())
+    return db.query(User).filter(User.id == user_id).first()
 
-                        p_text = f"{int(p_val)}" if p_val == int(p_val) else f"{p_val}"
-                        t_text = f"{int(t_val)}" if t_val == int(t_val) else f"{t_val}"
+def deduct_credit(user_id, amount=1):
+    db = next(get_db())
+    user = db.query(User).filter(User.id == user_id).first()
+    if user and user.credits >= amount:
+        user.credits -= amount
+        db.commit()
+        return True
+    return False
 
-                        st.markdown(f"""
-                        <div style="font-size:18px; margin-bottom:5px;">
-                            <strong>Soru {soru.get('no')}</strong> {ikon} <span style="color:{renk_kod}; font-weight:bold;">[{p_text} / {t_text}]</span>
-                        </div>
-                        <div style="font-size:16px; margin-bottom:10px; color:#333;">
-                            <strong>Cevap:</strong> {cevap_text}
-                        </div>
-                        <div style="background-color:#f0f8ff; padding:15px; border-radius:8px; border-left:6px solid #002D62; font-size:16px;">
-                            <span style="font-weight:bold; color:#002D62;">🤖 Yorum:</span> {soru.get('yorum')}
-                        </div>
-                        <hr style="margin: 10px 0;">
-                        """, unsafe_allow_html=True)
+def save_results(user_id, results_list, oturum_adi):
+    db = next(get_db())
+    for r in results_list:
+        rec = ExamRecord(user_id=user_id, student_name=r.get("Ad Soyad"), student_number=r.get("Numara"), session_name=oturum_adi, total_score=int(r.get("Toplam Puan", 0)), details_json=json.dumps(r.get("Detaylar", []), ensure_ascii=False))
+        db.add(rec)
+    db.commit()
 
-utils.footer_ekle()
+def load_results(user_id):
+    db = next(get_db())
+    recs = db.query(ExamRecord).filter(ExamRecord.user_id==user_id).order_by(ExamRecord.created_at.desc()).all()
+    data = []
+    for r in recs:
+        data.append({"Ad Soyad": r.student_name, "Numara": r.student_number, "Oturum": r.session_name, "Tarih": r.created_at, "Toplam Puan": r.total_score, "Detaylar": json.loads(r.details_json)})
+    return data
+
+def get_existing_sessions(user_id):
+    db = next(get_db())
+    sessions = db.query(ExamRecord.session_name).filter(ExamRecord.user_id == user_id).distinct().all()
+    return [s[0] for s in sessions]
+
+def delete_exam(user_id, session_name):
+    db = next(get_db())
+    try:
+        db.query(ExamRecord).filter(ExamRecord.user_id == user_id, ExamRecord.session_name == session_name).delete()
+        db.commit()
+        return True
+    except: return False
+
+def get_img_as_base64(file):
+    try:
+        with open(file, "rb") as f: data = f.read()
+        return base64.b64encode(data).decode()
+    except: return ""
+
+def extract_json(text):
+    text = text.strip()
+    try:
+        if "```json" in text: text = text.split("```json")[1].split("```")[0]
+        elif "```" in text: text = text.split("```")[1].split("```")[0]
+        start = text.find('{'); end = text.rfind('}') + 1
+        if start != -1 and end != 0: return text[start:end]
+        return text
+    except: return text
