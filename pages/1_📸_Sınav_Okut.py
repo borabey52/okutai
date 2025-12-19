@@ -75,12 +75,10 @@ with col_sol:
     
     # --- CEVAP ANAHTARI (HEIC DESTEKLİ) ---
     with st.expander("Cevap Anahtarı (Opsiyonel)"):
-        # HEIC formatını da kabul ediyoruz
         rubrik_files = st.file_uploader("Yükle (Ön ve Arka Yüz)", type=["jpg","png","jpeg","heic","heif"], accept_multiple_files=True, key="rub")
         rub_imgs = []
         if rubrik_files:
             for f in rubrik_files:
-                # utils içindeki akıllı fonksiyonu kullanıyoruz
                 processed_img = utils.resim_yukle_ve_isle(f)
                 if processed_img:
                     rub_imgs.append(processed_img)
@@ -89,27 +87,36 @@ with col_sol:
 
 with col_sag:
     st.header("2. Kağıt Yükleme")
-    # MOBİL KULLANICILAR İÇİN AYRIM
+    
     t1, t2 = st.tabs(["📂 Galeriden Yükle", "📸 Kamera ile Çek"])
     
     upl_files = []
     cam_file = None
     
     with t1:
-        # MOBİL UYARISI
-        st.info("💡 **Önemli:** Burası galerinizdeki **hazır fotoğrafları** (iPhone/Android dahil) yüklemek içindir. Anlık çekim yapacaksanız yandaki **'Kamera ile Çek'** sekmesini kullanın.")
-        
-        # HEIC formatını da kabul ediyoruz
+        st.info("💡 **Önemli:** Burası galerinizdeki **hazır fotoğrafları** yüklemek içindir. Anlık çekim için yandaki **'Kamera ile Çek'** sekmesini kullanın.")
         fls = st.file_uploader("Galeriden Seç", type=["jpg","png","jpeg","heic","heif"], accept_multiple_files=True)
         if fls: upl_files = fls; st.success(f"✅ {len(fls)} dosya seçildi.")
     
     with t2:
-        st.warning("Fotoğrafı çektikten sonra sağ altta çıkan **'Fotoğrafı Kullan'** butonuna basmayı unutmayın.")
+        # --- KAMERA MANTIĞINI DÜZELTTİK ---
+        st.warning("Kamerayı başlattıktan sonra fotoğrafı çekin. Aşağıda 'Fotoğraf Alındı' yazısını görmelisiniz.")
+        
         if st.session_state.kamera_acik:
-            if st.button("❌ Kamerayı Kapat"): st.session_state.kamera_acik=False; st.rerun()
+            if st.button("❌ Kamerayı Kapat"): st.session_state.kamera_acik = False; st.rerun()
+            
+            # Kamera input bileşeni
             cam_file = st.camera_input("Kağıdı ortalayarak çekin")
+            
+            # --- İŞTE EKSİK OLAN GERİ BİLDİRİM KISMI ---
+            if cam_file is not None:
+                st.success("✅ Fotoğraf başarıyla hafızaya alındı! Aşağıdaki **'KAĞITLARI OKUT VE PUANLA'** butonuna basabilirsiniz.")
+                # Kullanıcıya güven vermek için küçük bir önizleme (opsiyonel ama iyi olur)
+                st.image(cam_file, width=150, caption="İşlenecek Fotoğraf")
+            # -------------------------------------------
+            
         else:
-            if st.button("📸 Kamerayı Başlat", type="primary"): st.session_state.kamera_acik=True; st.rerun()
+            if st.button("📸 Kamerayı Başlat", type="primary"): st.session_state.kamera_acik = True; st.rerun()
 
 st.divider()
 
@@ -121,35 +128,34 @@ if st.button("🚀 KAĞITLARI OKUT VE PUANLA", type="primary", use_container_wid
     else:
         tum_gorseller = []
         
-        # --- GÖRSEL İŞLEME KISMI (utils.resim_yukle_ve_isle KULLANILIYOR) ---
+        # --- GÖRSEL İŞLEME ---
         if upl_files: 
             for f in upl_files:
-                img = utils.resim_yukle_ve_isle(f) # HEIC, Yan dönme, Boyut sorunlarını çözer
+                img = utils.resim_yukle_ve_isle(f)
                 if img: tum_gorseller.append(img)
                 
         if cam_file: 
+            # Kamera verisi BytesIO olduğu için utils fonksiyonumuz bunu da işler
             img = utils.resim_yukle_ve_isle(cam_file)
             if img: tum_gorseller.append(img)
-        # --------------------------------------------------------------------
+        # ---------------------
         
         if not tum_gorseller:
-            st.warning("Dosya yüklenemedi veya formatı bozuk.")
+            st.warning("⚠️ Lütfen önce dosya yükleyin veya kamera ile fotoğraf çekin.")
         else:
             genai.configure(api_key=SABIT_API_KEY)
             model = genai.GenerativeModel("gemini-flash-latest")
             
             is_paketleri = []
-            # Çift sayfa mantığı (Görseller artık işlenmiş Image objesi)
             adim = 2 if "Çift" in sayfa_tipi and len(tum_gorseller)>1 else 1
             
-            # Sırayla işle
             for i in range(0, len(tum_gorseller), adim):
                 p = tum_gorseller[i:i+adim]
                 if p: is_paketleri.append(p)
 
             prog = st.progress(0); txt = st.empty(); yeni_veriler = []
             
-            # --- GÜÇLENDİRİLMİŞ PROMPT (BOŞ KAĞIT KORUMASI) ---
+            # --- PROMPT ---
             ANA_KOMUT = """
             Sen bir öğretmen asistanısın. Görevin sınav kağıdını okumak.
             
@@ -172,10 +178,7 @@ if st.button("🚀 KAĞITLARI OKUT VE PUANLA", type="primary", use_container_wid
                 txt.write(f"⏳ Okunuyor: {idx+1}/{len(is_paketleri)} - {oturum_adi}")
                 try:
                     prompt = [ANA_KOMUT]
-                    
-                    if ogretmen_promptu: 
-                        prompt.append(f"ÖĞRETMEN EK NOTU: {ogretmen_promptu}")
-                    
+                    if ogretmen_promptu: prompt.append(f"ÖĞRETMEN EK NOTU: {ogretmen_promptu}")
                     if rub_imgs: 
                         prompt.append("CEVAP ANAHTARI (RUBRİK):")
                         prompt.extend(rub_imgs) 
@@ -210,7 +213,7 @@ if st.button("🚀 KAĞITLARI OKUT VE PUANLA", type="primary", use_container_wid
                     st.session_state.credits -= 1
                 txt.success("✅ Tamamlandı ve Kaydedildi!"); st.balloons(); time.sleep(1); st.rerun()
 
-# --- ANLIK SONUÇLAR (ŞIK TASARIM) ---
+# --- ANLIK SONUÇLAR ---
 if len(st.session_state.sinif_verileri) > 0:
     st.markdown(f"### 📝 {oturum_adi} - Sonuçlar")
     for i, ogrenci in enumerate(reversed(st.session_state.sinif_verileri)):
@@ -225,7 +228,6 @@ if len(st.session_state.sinif_verileri) > 0:
                         renk_kod = "green" if p_val == t_val and t_val > 0 else "red" if p_val == 0 else "orange"
                         ikon = "✅" if p_val == t_val and t_val > 0 else "❌" if p_val == 0 else "⚠️"
                         
-                        # Eğer cevap "BOŞ" olarak geldiyse özel uyarı
                         cevap_text = soru.get('cevap', '')
                         if "BOŞ" in str(cevap_text).upper():
                             ikon = "⛔"
@@ -248,5 +250,4 @@ if len(st.session_state.sinif_verileri) > 0:
                         <hr style="margin: 10px 0;">
                         """, unsafe_allow_html=True)
 
-# Footer
 utils.footer_ekle()
