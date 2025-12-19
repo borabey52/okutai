@@ -2,7 +2,6 @@ streamlit
 google-generativeai
 Pillow
 pillow-heif
-pandas
-openpyxl
 sqlalchemy
 bcrypt
+pandas
