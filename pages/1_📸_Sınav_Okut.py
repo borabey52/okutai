@@ -90,34 +90,19 @@ with col_sag:
     st.header("2. Kağıt Yükleme ve Başlatma")
     st.info("💡 **Bilgi:** Mobilden giriyorsanız alttaki alana tıklayıp **Kamera** veya **Galeri** seçeneğini kullanabilirsiniz.")
     
-    # --- 🔥 KRİTİK DEĞİŞİKLİK: FORM YAPISI ---
-    # Dosya yükleme ve Gönder butonunu aynı form içine aldık.
-    # Bu, sayfa yenilense bile verinin kaybolmamasını sağlar.
-    with st.form("sinav_okuma_formu", clear_on_submit=False):
-        
-        upl_files = st.file_uploader(
-            "Sınav Kağıtlarını Seç veya Çek", 
-            type=["jpg","png","jpeg","heic","heif","JPG","PNG","JPEG","HEIC","HEIF"], 
-            accept_multiple_files=True,
-            key="ana_dosya_yukleyici"
-        )
-        
-        # Gönder butonu artık formun içinde
-        submitted = st.form_submit_button("🚀 KAĞITLARI OKUT VE PUANLA", type="primary", use_container_width=True)
-
-st.divider()
-
-# --- İŞLEMLER BUTONA BASILINCA BAŞLAR ---
-if submitted:
-    if not oturum_adi:
-        st.error("⚠️ Lütfen bir Sınav Adı belirleyin veya listeden seçin!")
-    elif not SABIT_API_KEY:
-        st.error("API Key eksik.")
-    elif not upl_files:
-        st.warning("⚠️ Lütfen önce dosya yükleyin veya fotoğraf çekin.")
-    else:
-        # --- DOSYA İŞLEME VE BOYUT GÖSTERME ---
-        tum_gorseller = []
+    # --- FORM KALDIRILDI -> DOĞRUDAN YÜKLEME ---
+    # Bu yöntem mobilde verinin kaybolmasını engeller.
+    upl_files = st.file_uploader(
+        "Sınav Kağıtlarını Seç veya Çek", 
+        type=["jpg","png","jpeg","heic","heif","JPG","PNG","JPEG","HEIC","HEIF"], 
+        accept_multiple_files=True,
+        key="direct_file_uploader"
+    )
+    
+    tum_gorseller = []
+    
+    # Dosya seçildiği AN işlemleri başlatıyoruz (Butona basmayı beklemiyoruz)
+    if upl_files:
         st.write("📥 Dosyalar işleniyor...")
         
         for f in upl_files:
@@ -126,7 +111,7 @@ if submitted:
                 if img: 
                     tum_gorseller.append(img)
                     
-                    # Boyut Bilgisi (Kullanıcı görsün diye)
+                    # Boyut Bilgisi
                     img_byte_arr = io.BytesIO()
                     img.save(img_byte_arr, format='JPEG', quality=85)
                     size_kb = len(img_byte_arr.getvalue()) / 1024
@@ -137,77 +122,91 @@ if submitted:
             except Exception as e:
                 st.error(f"❌ Hata: {f.name} işlenirken sorun oluştu: {e}")
 
-        # Eğer işlenen görsel varsa Yapay Zekaya gönder
-        if tum_gorseller:
-            genai.configure(api_key=SABIT_API_KEY)
-            model = genai.GenerativeModel("gemini-flash-latest")
-            
-            is_paketleri = []
-            adim = 2 if "Çift" in sayfa_tipi and len(tum_gorseller)>1 else 1
-            
-            for i in range(0, len(tum_gorseller), adim):
-                p = tum_gorseller[i:i+adim]
-                if p: is_paketleri.append(p)
+        if len(tum_gorseller) > 0:
+            st.success(f"🚀 {len(tum_gorseller)} kağıt hazır! Aşağıdaki butona basarak puanlamayı başlat.")
 
-            prog = st.progress(0); txt = st.empty(); yeni_veriler = []
-            
-            # --- PROMPT ---
-            ANA_KOMUT = """
-            Sen bir öğretmen asistanısın. Görevin sınav kağıdını okumak.
-            
-            ÇOK ÖNEMLİ KURAL - BOŞ KAĞIT KONTROLÜ:
-            1. Önce kağıda dikkatlice bak. Öğrenci tarafından yazılmış bir cevap, işaretlenmiş bir şık veya karalama var mı?
-            2. Eğer kağıt üzerinde sadece soru metni varsa ve öğrenci HİÇBİR ŞEY yazmamışsa, o soru için "cevap": "BOŞ", "puan": 0, "yorum": "Öğrenci cevap vermemiş." olarak döndür.
-            3. ASLA soruyu kendin çözüp öğrenci çözmüş gibi puan verme. Sadece öğrencinin yazdıklarını değerlendir.
-            
-            ÇIKTI FORMATI:
-            Sadece geçerli bir JSON döndür. Başka hiçbir metin yazma.
-            Format: {"kimlik":{"ad_soyad":"...","numara":"..."},"degerlendirme":[{"no":"1","soru":"...","cevap":"...","puan":0,"tam_puan":10,"yorum":"..."}]}
-            
-            PUANLAMA:
-            - Cevap doğruysa tam puan ver.
-            - Kısmen doğruysa puan kır.
-            - Yanlışsa veya BOŞ ise 0 ver.
-            """
-            
-            for idx, imgs in enumerate(is_paketleri):
-                txt.write(f"⏳ Okunuyor: {idx+1}/{len(is_paketleri)} - {oturum_adi}")
-                try:
-                    prompt = [ANA_KOMUT]
-                    if ogretmen_promptu: prompt.append(f"ÖĞRETMEN EK NOTU: {ogretmen_promptu}")
-                    if rub_imgs: 
-                        prompt.append("CEVAP ANAHTARI (RUBRİK):")
-                        prompt.extend(rub_imgs) 
+st.divider()
 
-                    prompt.append("DEĞERLENDİRİLECEK ÖĞRENCİ KAĞIDI:"); prompt.extend(imgs)
+# --- PUANLA BUTONU ---
+# Buton artık sadece "Yapay Zekayı Çalıştır" görevi görüyor. Dosya yükleme işi yukarıda bitti.
+if st.button("🚀 PUANLAMAYI BAŞLAT", type="primary", use_container_width=True):
+    if not oturum_adi:
+        st.error("⚠️ Lütfen bir Sınav Adı belirleyin veya listeden seçin!")
+    elif not SABIT_API_KEY:
+        st.error("API Key eksik.")
+    elif not tum_gorseller:
+        st.warning("⚠️ Lütfen önce yukarıdan dosya yükleyin.")
+    else:
+        # --- YAPAY ZEKA İŞLEMLERİ ---
+        genai.configure(api_key=SABIT_API_KEY)
+        model = genai.GenerativeModel("gemini-flash-latest")
+        
+        is_paketleri = []
+        adim = 2 if "Çift" in sayfa_tipi and len(tum_gorseller)>1 else 1
+        
+        for i in range(0, len(tum_gorseller), adim):
+            p = tum_gorseller[i:i+adim]
+            if p: is_paketleri.append(p)
 
-                    res = model.generate_content(prompt, safety_settings=guvenlik_ayarlari)
-                    try: cevap_metni = res.text
-                    except: continue
+        prog = st.progress(0); txt = st.empty(); yeni_veriler = []
+        
+        # --- PROMPT ---
+        ANA_KOMUT = """
+        Sen bir öğretmen asistanısın. Görevin sınav kağıdını okumak.
+        
+        ÇOK ÖNEMLİ KURAL - BOŞ KAĞIT KONTROLÜ:
+        1. Önce kağıda dikkatlice bak. Öğrenci tarafından yazılmış bir cevap, işaretlenmiş bir şık veya karalama var mı?
+        2. Eğer kağıt üzerinde sadece soru metni varsa ve öğrenci HİÇBİR ŞEY yazmamışsa, o soru için "cevap": "BOŞ", "puan": 0, "yorum": "Öğrenci cevap vermemiş." olarak döndür.
+        3. ASLA soruyu kendin çözüp öğrenci çözmüş gibi puan verme. Sadece öğrencinin yazdıklarını değerlendir.
+        
+        ÇIKTI FORMATI:
+        Sadece geçerli bir JSON döndür. Başka hiçbir metin yazma.
+        Format: {"kimlik":{"ad_soyad":"...","numara":"..."},"degerlendirme":[{"no":"1","soru":"...","cevap":"...","puan":0,"tam_puan":10,"yorum":"..."}]}
+        
+        PUANLAMA:
+        - Cevap doğruysa tam puan ver.
+        - Kısmen doğruysa puan kır.
+        - Yanlışsa veya BOŞ ise 0 ver.
+        """
+        
+        for idx, imgs in enumerate(is_paketleri):
+            txt.write(f"⏳ Okunuyor: {idx+1}/{len(is_paketleri)} - {oturum_adi}")
+            try:
+                prompt = [ANA_KOMUT]
+                if ogretmen_promptu: prompt.append(f"ÖĞRETMEN EK NOTU: {ogretmen_promptu}")
+                if rub_imgs: 
+                    prompt.append("CEVAP ANAHTARI (RUBRİK):")
+                    prompt.extend(rub_imgs) 
 
-                    d = json.loads(utils.extract_json(cevap_metni))
-                    k = d.get("kimlik",{})
-                    s = d.get("degerlendirme",[])
-                    tp = sum([float(x.get('puan',0)) for x in s])
-                    
-                    kayit = {
-                        "Ad Soyad": k.get("ad_soyad","?"), 
-                        "Numara": k.get("numara","?"), 
-                        "Oturum": oturum_adi,     
-                        "Toplam Puan": tp, 
-                        "Detaylar": s
-                    }
-                    st.session_state.sinif_verileri.append(kayit)
-                    yeni_veriler.append(kayit)
-                    
-                except Exception as e: st.error(f"Hata: {e}")
-                prog.progress((idx+1)/len(is_paketleri))
-            
-            if yeni_veriler:
-                utils.save_results(st.session_state.user_id, yeni_veriler, oturum_adi)
-                if utils.deduct_credit(st.session_state.user_id, 1):
-                    st.session_state.credits -= 1
-                txt.success("✅ Tamamlandı ve Kaydedildi!"); st.balloons(); time.sleep(1); st.rerun()
+                prompt.append("DEĞERLENDİRİLECEK ÖĞRENCİ KAĞIDI:"); prompt.extend(imgs)
+
+                res = model.generate_content(prompt, safety_settings=guvenlik_ayarlari)
+                try: cevap_metni = res.text
+                except: continue
+
+                d = json.loads(utils.extract_json(cevap_metni))
+                k = d.get("kimlik",{})
+                s = d.get("degerlendirme",[])
+                tp = sum([float(x.get('puan',0)) for x in s])
+                
+                kayit = {
+                    "Ad Soyad": k.get("ad_soyad","?"), 
+                    "Numara": k.get("numara","?"), 
+                    "Oturum": oturum_adi,     
+                    "Toplam Puan": tp, 
+                    "Detaylar": s
+                }
+                st.session_state.sinif_verileri.append(kayit)
+                yeni_veriler.append(kayit)
+                
+            except Exception as e: st.error(f"Hata: {e}")
+            prog.progress((idx+1)/len(is_paketleri))
+        
+        if yeni_veriler:
+            utils.save_results(st.session_state.user_id, yeni_veriler, oturum_adi)
+            if utils.deduct_credit(st.session_state.user_id, 1):
+                st.session_state.credits -= 1
+            txt.success("✅ Tamamlandı ve Kaydedildi!"); st.balloons(); time.sleep(1); st.rerun()
 
 # --- ANLIK SONUÇLAR ---
 if len(st.session_state.sinif_verileri) > 0:
