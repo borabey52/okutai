@@ -73,12 +73,14 @@ with col_sol:
     ogretmen_promptu = st.text_area("Öğretmen Notu / Kriter:", height=100, placeholder="Ör: Yazım hataları -1 puan...")
     sayfa_tipi = st.radio("Sayfa Düzeni", ["Tek Sayfa", "Çift Sayfa"], horizontal=True)
     
-    # --- CEVAP ANAHTARI (HEIC DESTEKLİ) ---
+    # --- CEVAP ANAHTARI ---
     with st.expander("Cevap Anahtarı (Opsiyonel)"):
+        # HEIC ve HEIF formatlarını da listeye ekledik
         rubrik_files = st.file_uploader("Yükle (Ön ve Arka Yüz)", type=["jpg","png","jpeg","heic","heif"], accept_multiple_files=True, key="rub")
         rub_imgs = []
         if rubrik_files:
             for f in rubrik_files:
+                # Akıllı dönüştürücümüz devrede
                 processed_img = utils.resim_yukle_ve_isle(f)
                 if processed_img:
                     rub_imgs.append(processed_img)
@@ -88,35 +90,24 @@ with col_sol:
 with col_sag:
     st.header("2. Kağıt Yükleme")
     
-    t1, t2 = st.tabs(["📂 Galeriden Yükle", "📸 Kamera ile Çek"])
+    # --- ARTIK SEKME YOK, SADECE YÜKLEME VAR ---
+    st.info("💡 **Bilgi:** Telefondan giriyorsanız **'Browse files'** butonuna basıp **Kamera** seçeneğini seçerek doğrudan fotoğraf çekip yükleyebilirsiniz.")
     
-    upl_files = []
-    cam_file = None
+    # HEIC ve HEIF ekledik ki iPhone'da çekilen fotolar görünsün
+    upl_files = st.file_uploader("Sınav Kağıtlarını Seç veya Çek", type=["jpg","png","jpeg","heic","heif"], accept_multiple_files=True)
     
-    with t1:
-        st.info("💡 **Önemli:** Burası galerinizdeki **hazır fotoğrafları** yüklemek içindir. Anlık çekim için yandaki **'Kamera ile Çek'** sekmesini kullanın.")
-        fls = st.file_uploader("Galeriden Seç", type=["jpg","png","jpeg","heic","heif"], accept_multiple_files=True)
-        if fls: upl_files = fls; st.success(f"✅ {len(fls)} dosya seçildi.")
+    tum_gorseller = []
     
-    with t2:
-        # --- KAMERA MANTIĞINI DÜZELTTİK ---
-        st.warning("Kamerayı başlattıktan sonra fotoğrafı çekin. Aşağıda 'Fotoğraf Alındı' yazısını görmelisiniz.")
+    if upl_files:
+        # İŞTE BURASI ÇOK ÖNEMLİ:
+        # Kullanıcı mobilden fotoğraf çektiğinde dosya HEIC veya devasa boyutta gelebilir.
+        # utils.resim_yukle_ve_isle fonksiyonu bunu JPG yapar ve küçültür.
+        for f in upl_files:
+            img = utils.resim_yukle_ve_isle(f)
+            if img: 
+                tum_gorseller.append(img)
         
-        if st.session_state.kamera_acik:
-            if st.button("❌ Kamerayı Kapat"): st.session_state.kamera_acik = False; st.rerun()
-            
-            # Kamera input bileşeni
-            cam_file = st.camera_input("Kağıdı ortalayarak çekin")
-            
-            # --- İŞTE EKSİK OLAN GERİ BİLDİRİM KISMI ---
-            if cam_file is not None:
-                st.success("✅ Fotoğraf başarıyla hafızaya alındı! Aşağıdaki **'KAĞITLARI OKUT VE PUANLA'** butonuna basabilirsiniz.")
-                # Kullanıcıya güven vermek için küçük bir önizleme (opsiyonel ama iyi olur)
-                st.image(cam_file, width=150, caption="İşlenecek Fotoğraf")
-            # -------------------------------------------
-            
-        else:
-            if st.button("📸 Kamerayı Başlat", type="primary"): st.session_state.kamera_acik = True; st.rerun()
+        st.success(f"✅ {len(tum_gorseller)} kağıt işlenmeye hazır.")
 
 st.divider()
 
@@ -126,22 +117,8 @@ if st.button("🚀 KAĞITLARI OKUT VE PUANLA", type="primary", use_container_wid
     elif not SABIT_API_KEY:
         st.error("API Key eksik.")
     else:
-        tum_gorseller = []
-        
-        # --- GÖRSEL İŞLEME ---
-        if upl_files: 
-            for f in upl_files:
-                img = utils.resim_yukle_ve_isle(f)
-                if img: tum_gorseller.append(img)
-                
-        if cam_file: 
-            # Kamera verisi BytesIO olduğu için utils fonksiyonumuz bunu da işler
-            img = utils.resim_yukle_ve_isle(cam_file)
-            if img: tum_gorseller.append(img)
-        # ---------------------
-        
         if not tum_gorseller:
-            st.warning("⚠️ Lütfen önce dosya yükleyin veya kamera ile fotoğraf çekin.")
+            st.warning("⚠️ Lütfen önce dosya yükleyin veya fotoğraf çekin.")
         else:
             genai.configure(api_key=SABIT_API_KEY)
             model = genai.GenerativeModel("gemini-flash-latest")
@@ -149,6 +126,7 @@ if st.button("🚀 KAĞITLARI OKUT VE PUANLA", type="primary", use_container_wid
             is_paketleri = []
             adim = 2 if "Çift" in sayfa_tipi and len(tum_gorseller)>1 else 1
             
+            # tum_gorseller zaten işlenmiş Image objeleri olduğu için direkt kullanıyoruz
             for i in range(0, len(tum_gorseller), adim):
                 p = tum_gorseller[i:i+adim]
                 if p: is_paketleri.append(p)
