@@ -75,12 +75,10 @@ with col_sol:
     
     # --- CEVAP ANAHTARI ---
     with st.expander("Cevap Anahtarı (Opsiyonel)"):
-        # HEIC ve HEIF formatlarını da listeye ekledik
-        rubrik_files = st.file_uploader("Yükle (Ön ve Arka Yüz)", type=["jpg","png","jpeg","heic","heif"], accept_multiple_files=True, key="rub")
+        rubrik_files = st.file_uploader("Yükle (Ön ve Arka Yüz)", type=["jpg","png","jpeg","heic","heif","JPG","PNG","JPEG","HEIC"], accept_multiple_files=True, key="rub")
         rub_imgs = []
         if rubrik_files:
             for f in rubrik_files:
-                # Akıllı dönüştürücümüz devrede
                 processed_img = utils.resim_yukle_ve_isle(f)
                 if processed_img:
                     rub_imgs.append(processed_img)
@@ -90,24 +88,35 @@ with col_sol:
 with col_sag:
     st.header("2. Kağıt Yükleme")
     
-    # --- ARTIK SEKME YOK, SADECE YÜKLEME VAR ---
-    st.info("💡 **Bilgi:** Telefondan giriyorsanız **'Browse files'** butonuna basıp **Kamera** seçeneğini seçerek doğrudan fotoğraf çekip yükleyebilirsiniz.")
+    st.info("💡 **Bilgi:** Mobilden giriyorsanız aşağıdaki alana tıklayıp **Kamera** veya **Galeri** seçeneğini kullanabilirsiniz.")
     
-    # HEIC ve HEIF ekledik ki iPhone'da çekilen fotolar görünsün
-    upl_files = st.file_uploader("Sınav Kağıtlarını Seç veya Çek", type=["jpg","png","jpeg","heic","heif"], accept_multiple_files=True)
+    # DÜZELTME 1: Büyük/Küçük harf tüm uzantıları ekledik.
+    upl_files = st.file_uploader(
+        "Sınav Kağıtlarını Seç veya Çek", 
+        type=["jpg","png","jpeg","heic","heif","JPG","PNG","JPEG","HEIC","HEIF"], 
+        accept_multiple_files=True
+    )
     
     tum_gorseller = []
     
+    # DÜZELTME 2: Yükleme anında geri bildirim ve hata kontrolü
     if upl_files:
-        # İŞTE BURASI ÇOK ÖNEMLİ:
-        # Kullanıcı mobilden fotoğraf çektiğinde dosya HEIC veya devasa boyutta gelebilir.
-        # utils.resim_yukle_ve_isle fonksiyonu bunu JPG yapar ve küçültür.
-        for f in upl_files:
-            img = utils.resim_yukle_ve_isle(f)
-            if img: 
-                tum_gorseller.append(img)
+        st.write(f"📥 {len(upl_files)} dosya alındı, işleniyor...")
         
-        st.success(f"✅ {len(tum_gorseller)} kağıt işlenmeye hazır.")
+        for f in upl_files:
+            try:
+                img = utils.resim_yukle_ve_isle(f)
+                if img: 
+                    tum_gorseller.append(img)
+                else:
+                    st.error(f"❌ '{f.name}' dosyası okunamadı! (Format desteklenmiyor olabilir)")
+            except Exception as e:
+                st.error(f"❌ Hata: {f.name} işlenirken sorun oluştu: {e}")
+        
+        if len(tum_gorseller) > 0:
+            st.success(f"✅ Toplam {len(tum_gorseller)} kağıt başarıyla hazırlandı!")
+            # Kullanıcıya ilk kağıdın ufak bir önizlemesini gösterelim ki içi rahat etsin
+            st.image(tum_gorseller[0], width=150, caption="Önizleme (İlk Kağıt)")
 
 st.divider()
 
@@ -118,7 +127,7 @@ if st.button("🚀 KAĞITLARI OKUT VE PUANLA", type="primary", use_container_wid
         st.error("API Key eksik.")
     else:
         if not tum_gorseller:
-            st.warning("⚠️ Lütfen önce dosya yükleyin veya fotoğraf çekin.")
+            st.warning("⚠️ Henüz geçerli bir dosya yüklenmedi. Lütfen yukarıdaki kutudan dosya seçin veya fotoğraf çekin.")
         else:
             genai.configure(api_key=SABIT_API_KEY)
             model = genai.GenerativeModel("gemini-flash-latest")
@@ -126,7 +135,6 @@ if st.button("🚀 KAĞITLARI OKUT VE PUANLA", type="primary", use_container_wid
             is_paketleri = []
             adim = 2 if "Çift" in sayfa_tipi and len(tum_gorseller)>1 else 1
             
-            # tum_gorseller zaten işlenmiş Image objeleri olduğu için direkt kullanıyoruz
             for i in range(0, len(tum_gorseller), adim):
                 p = tum_gorseller[i:i+adim]
                 if p: is_paketleri.append(p)
