@@ -90,8 +90,6 @@ with col_sag:
     st.header("2. Kağıt Yükleme ve Başlatma")
     st.info("💡 **Bilgi:** Mobilden giriyorsanız alttaki alana tıklayıp **Kamera** veya **Galeri** seçeneğini kullanabilirsiniz.")
     
-    # --- FORM KALDIRILDI -> DOĞRUDAN YÜKLEME ---
-    # Bu yöntem mobilde verinin kaybolmasını engeller.
     upl_files = st.file_uploader(
         "Sınav Kağıtlarını Seç veya Çek", 
         type=["jpg","png","jpeg","heic","heif","JPG","PNG","JPEG","HEIC","HEIF"], 
@@ -101,34 +99,39 @@ with col_sag:
     
     tum_gorseller = []
     
-    # Dosya seçildiği AN işlemleri başlatıyoruz (Butona basmayı beklemiyoruz)
     if upl_files:
-        st.write("📥 Dosyalar işleniyor...")
-        
-        for f in upl_files:
-            try:
-                img = utils.resim_yukle_ve_isle(f)
-                if img: 
-                    tum_gorseller.append(img)
-                    
-                    # Boyut Bilgisi
-                    img_byte_arr = io.BytesIO()
-                    img.save(img_byte_arr, format='JPEG', quality=85)
-                    size_kb = len(img_byte_arr.getvalue()) / 1024
-                    orig_mb = f.size / (1024 * 1024)
-                    st.caption(f"✅ **{f.name}** alındı (📉 {orig_mb:.1f} MB -> **{size_kb:.0f} KB**)")
-                else:
-                    st.error(f"❌ '{f.name}' dosyası okunamadı!")
-            except Exception as e:
-                st.error(f"❌ Hata: {f.name} işlenirken sorun oluştu: {e}")
+        # --- LİSTE KİRLİLİĞİNİ ÖNLEMEK İÇİN EXPANDER KULLANIYORUZ ---
+        with st.status("📂 Dosyalar işleniyor...", expanded=True) as status:
+            
+            toplam_boyut_mb = 0
+            
+            for f in upl_files:
+                try:
+                    img = utils.resim_yukle_ve_isle(f)
+                    if img: 
+                        tum_gorseller.append(img)
+                        # Sadece dosya işlendiğini yazıyoruz, detayı aşağıda
+                        toplam_boyut_mb += (f.size / (1024 * 1024))
+                    else:
+                        st.error(f"❌ '{f.name}' okunamadı!")
+                except Exception as e:
+                    st.error(f"❌ Hata: {f.name} - {e}")
+            
+            # İşlem bitince durumu güncelle ve kutuyu kapat
+            status.update(label=f"✅ {len(tum_gorseller)} Kağıt Hazır! (Toplam {toplam_boyut_mb:.1f} MB işlendi)", state="complete", expanded=False)
 
+        # Temiz ve net bir başarı mesajı
         if len(tum_gorseller) > 0:
-            st.success(f"🚀 {len(tum_gorseller)} kağıt hazır! Aşağıdaki butona basarak puanlamayı başlat.")
+            st.success(f"🚀 Toplam **{len(tum_gorseller)}** adet sınav kağıdı başarıyla yüklendi. Puanlamaya başlayabilirsiniz.")
+            
+            # Meraklısı için detayları buraya gizledik
+            with st.expander("🔍 Yüklenen Dosyaların Listesini Gör"):
+                for i, f in enumerate(upl_files):
+                    st.text(f"{i+1}. {f.name}")
 
 st.divider()
 
 # --- PUANLA BUTONU ---
-# Buton artık sadece "Yapay Zekayı Çalıştır" görevi görüyor. Dosya yükleme işi yukarıda bitti.
 if st.button("🚀 PUANLAMAYI BAŞLAT", type="primary", use_container_width=True):
     if not oturum_adi:
         st.error("⚠️ Lütfen bir Sınav Adı belirleyin veya listeden seçin!")
