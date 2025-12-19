@@ -6,6 +6,7 @@ from PIL import Image
 import json
 import time
 import os
+import io
 
 # --- SAYFA VE MERKEZİ YÖNETİM ---
 st.set_page_config(page_title="Sınav Okut", page_icon="📸", layout="wide", initial_sidebar_state="expanded")
@@ -86,49 +87,58 @@ with col_sol:
     # ----------------------------
 
 with col_sag:
-    st.header("2. Kağıt Yükleme")
+    st.header("2. Kağıt Yükleme ve Başlatma")
+    st.info("💡 **Bilgi:** Mobilden giriyorsanız alttaki alana tıklayıp **Kamera** veya **Galeri** seçeneğini kullanabilirsiniz.")
     
-    st.info("💡 **Bilgi:** Mobilden giriyorsanız aşağıdaki alana tıklayıp **Kamera** veya **Galeri** seçeneğini kullanabilirsiniz.")
-    
-    # DÜZELTME 1: Büyük/Küçük harf tüm uzantıları ekledik.
-    upl_files = st.file_uploader(
-        "Sınav Kağıtlarını Seç veya Çek", 
-        type=["jpg","png","jpeg","heic","heif","JPG","PNG","JPEG","HEIC","HEIF"], 
-        accept_multiple_files=True
-    )
-    
-    tum_gorseller = []
-    
-    # DÜZELTME 2: Yükleme anında geri bildirim ve hata kontrolü
-    if upl_files:
-        st.write(f"📥 {len(upl_files)} dosya alındı, işleniyor...")
+    # --- 🔥 KRİTİK DEĞİŞİKLİK: FORM YAPISI ---
+    # Dosya yükleme ve Gönder butonunu aynı form içine aldık.
+    # Bu, sayfa yenilense bile verinin kaybolmamasını sağlar.
+    with st.form("sinav_okuma_formu", clear_on_submit=False):
+        
+        upl_files = st.file_uploader(
+            "Sınav Kağıtlarını Seç veya Çek", 
+            type=["jpg","png","jpeg","heic","heif","JPG","PNG","JPEG","HEIC","HEIF"], 
+            accept_multiple_files=True,
+            key="ana_dosya_yukleyici"
+        )
+        
+        # Gönder butonu artık formun içinde
+        submitted = st.form_submit_button("🚀 KAĞITLARI OKUT VE PUANLA", type="primary", use_container_width=True)
+
+st.divider()
+
+# --- İŞLEMLER BUTONA BASILINCA BAŞLAR ---
+if submitted:
+    if not oturum_adi:
+        st.error("⚠️ Lütfen bir Sınav Adı belirleyin veya listeden seçin!")
+    elif not SABIT_API_KEY:
+        st.error("API Key eksik.")
+    elif not upl_files:
+        st.warning("⚠️ Lütfen önce dosya yükleyin veya fotoğraf çekin.")
+    else:
+        # --- DOSYA İŞLEME VE BOYUT GÖSTERME ---
+        tum_gorseller = []
+        st.write("📥 Dosyalar işleniyor...")
         
         for f in upl_files:
             try:
                 img = utils.resim_yukle_ve_isle(f)
                 if img: 
                     tum_gorseller.append(img)
+                    
+                    # Boyut Bilgisi (Kullanıcı görsün diye)
+                    img_byte_arr = io.BytesIO()
+                    img.save(img_byte_arr, format='JPEG', quality=85)
+                    size_kb = len(img_byte_arr.getvalue()) / 1024
+                    orig_mb = f.size / (1024 * 1024)
+                    st.caption(f"✅ **{f.name}** alındı (📉 {orig_mb:.1f} MB -> **{size_kb:.0f} KB**)")
                 else:
-                    st.error(f"❌ '{f.name}' dosyası okunamadı! (Format desteklenmiyor olabilir)")
+                    st.error(f"❌ '{f.name}' dosyası okunamadı!")
             except Exception as e:
                 st.error(f"❌ Hata: {f.name} işlenirken sorun oluştu: {e}")
-        
-        if len(tum_gorseller) > 0:
-            st.success(f"✅ Toplam {len(tum_gorseller)} kağıt başarıyla hazırlandı!")
-            # Kullanıcıya ilk kağıdın ufak bir önizlemesini gösterelim ki içi rahat etsin
-            st.image(tum_gorseller[0], width=150, caption="Önizleme (İlk Kağıt)")
 
-st.divider()
-
-if st.button("🚀 KAĞITLARI OKUT VE PUANLA", type="primary", use_container_width=True):
-    if not oturum_adi:
-        st.error("⚠️ Lütfen bir Sınav Adı belirleyin veya listeden seçin!")
-    elif not SABIT_API_KEY:
-        st.error("API Key eksik.")
-    else:
-        if not tum_gorseller:
-            st.warning("⚠️ Henüz geçerli bir dosya yüklenmedi. Lütfen yukarıdaki kutudan dosya seçin veya fotoğraf çekin.")
-        else:
+        # Eğer işlenen görsel varsa Yapay Zekaya gönder
+        if tum_gorseller:
             genai.configure(api_key=SABIT_API_KEY)
             model = genai.GenerativeModel("gemini-flash-latest")
             
